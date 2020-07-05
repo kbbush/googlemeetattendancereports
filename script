@@ -1,0 +1,224 @@
+// This script was authored by Goldy Arora to make a self-service method of getting Google Meet attendance reports.
+// Additional code contributed by Abhishek Nagar and Kyle Bush.
+// This script is neither influenced nor supported officially by Google, so please use it as a reference only.
+// This script will also check whether the requesting user is the meeting organizer or not to ensure attedance info is sent only to organizers.
+// This script works best when handled by a dedicated service account set up on your G Suite domain. This service account will need access to the Admin Reports API,
+// so create a custom admin role for this account in your Google Admin Console and grant access to Reports (under Admin Console Privileges > Security)
+// Create a Google Form to receive meeting codes, email addresses, date of Meet, and class period, and have this form send responses to a Google Sheet. Configure your Form to automatically collect email addresses.
+// Example Form at https://forms.gle/CxRvnCWHpjdKnobe8. All your users need to request these reports is to write down their 10-digit Meet codes before they end their Meets.
+// Then install this script to the Sheet you created and configure it to run on a trigger (run On Form Submit). Ideal usage of this would be to post your Form in a place that is easy to access, like embedding it in a Google Site.
+// Add two more columns to your Sheet: "Report Status" and "Report Link"
+// Make sure you are aware of Google Apps Script API quotas! For small and medium-sized schools, you should be fine, but this may not scale well to large domains.
+function getMeetAttendance() {
+
+// Pull data from your linked Google Sheet
+// Please make sure to change the sheet name here if it is different than Form Responses 1
+    var formSheet = SpreadsheetApp.getActive().getSheetByName("Form Responses 1")
+    var data = formSheet.getDataRange().getDisplayValues()
+
+    // Loop through the data to do our processing
+
+    for (var i = 1; i < data.length; i++) { // Make sure to map the columns here correctly. For example, [i][1] maps to column B in your Sheet, [i][0] maps to Column A, etc.
+        var userClaimedorganizer = data[i][1] // My version of these mappings may be different than yours, depending on how you set up your Form. This var maps to the email address column in your Sheet. 
+        var meetingCode = data[i][2].replace(/-/g, "") // Some users might copy and paste the meeting code which has "-", so let's replace it here. This var maps to the meeting code column in your Sheet.
+        var meetingType = "call_ended" // Do not change. Required to call API correctly.
+        var status = data[i][6] // This var maps to the report status in your Sheet.
+        var userEmail = data[i][1] // This var maps to the email address column in your Sheet.
+        var meetDate = data[i][4].toString() // This var maps to the meeting date column in your Sheet.
+        var meetPeriod = data[i][5].toString() // If you are setting this up for a school that doesn't use class periods, you can delete this line and this var wherever it appears in the code. This var maps to the class period column in your Sheet.
+        var fileArray = [
+                ["User Email", "Duration (in mins)"]
+            ]
+
+
+
+        // We do not to process the requests which are already fulfilled, so this will only process new/fresh requests.
+
+        if (status != "Report Sent" && status != "User Not Authorized") {
+            let activities = new Map();
+            var applicationName = "meet"
+            var pageToken;
+
+            var optionalArgs = {
+                event_name: meetingType,
+                filters: "meeting_code==" + meetingCode,
+                pageToken: pageToken
+            };
+
+            // For big meetings or livestreams where the attendees list would be large, this will keep calling the API until we parse the last result page via pageToken.
+            do {
+                apiCall = getMeetingDetails(applicationName, optionalArgs)
+                var apiResponse = apiCall.items
+                var pageToken = apiCall.nextPageToken
+                for (var key in apiResponse) {
+                    var events = apiResponse[key]["events"]
+
+                    var apiClaimedorganizer = null
+
+
+                    // Parse the parameters from Events.
+
+                    events.forEach(function(item) {
+                        var parameters = item["parameters"]
+                        var obj = {}
+                        var isexternal = false
+
+                        // Filter the array for the items we need (e.g identifier, duration seconds, organizer email)
+
+                        parameters.forEach(function(filter) {
+
+                            if (filter["name"] == "identifier") {
+                                obj.email = filter["value"]
+                            }
+
+                            if (filter["name"] == "display_name") {
+                                name_ext = filter["value"]
+                            }
+                                
+                            if (filter["name"] == "is_external") { // The next two ifs will display the user's display name in the report if they are outside your domain.
+                                isexternal = filter["boolValue"]
+                            }
+                          
+                            if (isexternal == true) {
+                                obj.email = name_ext +" (EXTERNAL)"
+                            }
+                          
+                            if (filter["name"] == "duration_seconds") {
+                                obj.duration = Math.abs(filter["intValue"])
+
+                            }
+
+                            if (apiClaimedorganizer == null && filter["name"] == "organizer_email") {
+                                apiClaimedorganizer = filter["value"]
+
+                            }
+                        })
+
+
+                        // Push the values to our object based on our condition, e.g if the email isn't null.
+
+                        if ((obj.email != "" || obj.email != null)) {
+
+                            if (meetingType == "livestream_watched") {
+                                activities.set(obj.email, "Livestream Watched")
+
+                            } else if (meetingType == "call_ended" && obj.duration != null && obj.duration > 0) {
+                                if (activities.has(obj.email)) {
+                                    activities.set(obj.email, (activities.get(obj.email) + Math.round(obj.duration / 60)))
+                                } else {
+                                    activities.set(obj.email, Math.round(obj.duration / 60))
+                                }
+                            }
+                        }
+
+                    })
+                }
+
+                pageToken = apiCall.nextPageToken
+
+            } while (pageToken)
+
+            // Push the values to our fileArray
+
+            for (let [email, activity] of activities) {
+
+                fileArray.push([email, activity])
+
+            }
+
+
+            // Create Google documenat by calling our createDocument function
+            var doc = createDocument(meetingCode, fileArray, userEmail, meetDate, meetPeriod)
+
+            if (userClaimedorganizer == apiClaimedorganizer) {
+
+                authorizedResponse(formSheet, doc.getUrl(), meetingCode, userEmail, meetDate, meetPeriod, i)
+
+                shareDoc(doc.getId(), userEmail)
+
+            } else {
+                unAuthorizedResponse(formSheet, doc.getUrl(), meetingCode, userEmail, meetDate, meetPeriod, i)
+            }
+
+        } else {
+            console.log("error")
+        }
+
+
+    }
+
+}
+
+
+
+
+// Various functions leveraged above.
+
+
+// This functions takes the application name and optional arguments and call Reports API to get data
+
+function getMeetingDetails(applicationName, optionalArgs) {
+    var apiCall = AdminReports.Activities.list("all", applicationName, optionalArgs)
+    return apiCall
+
+}
+
+
+// This fucntion email the Google document with meeting attedance details if the requester is meeting organizer.
+
+function authorizedResponse(formSheet, docLink, meetingCode, userEmail, meetDate, meetPeriod, lineNumber) {
+    formSheet.getRange(lineNumber + 1, 7).setValue("Report Sent") // Change lineNumber depending on how your Sheet is set up. In this version, "7" maps to column G, "Report Status"
+    formSheet.getRange(lineNumber + 1, 8).setValue(docLink) // Change lineNumber depending on how your Sheet is set up. In this version, "8" maps to column G, "Report Link"
+    GmailApp.sendEmail(userEmail, "Your attendance report for Google Meet " + meetingCode +" - " +meetDate, `Here is your attendance report for Google Meet ${meetingCode} (${meetDate}, Period ${meetPeriod})
+                       ${docLink}
+                       
+Regards,
+D117 Google Meet Attendance Reporting
+
+For any questions, please contact the Tech Department`)
+
+}
+
+
+
+// This fucntion informs the requestor via email that he can't get meeting attendance as he isn't the organizer.
+
+function unAuthorizedResponse(formSheet, docLink, meetingCode, userEmail, meetDate, meetPeriod, lineNumber) {
+    formSheet.getRange(lineNumber + 1, 7).setValue("User Not Authorized") // Change lineNumber depending on how your Sheet is set up. In this version, "7" maps to column G, "Report Status"
+    formSheet.getRange(lineNumber + 1, 8).setValue(docLink) // Change lineNumber depending on how your Sheet is set up. In this version, "8" maps to column G, "Report Link"
+    GmailApp.sendEmail(userEmail, "Your attendance report for Google Meet " + meetingCode +" - " +meetDate, `Sorry, you are not authorized to get an attendance report for Google Meet ${meetingCode}. You are either not the meeting organizer, or you provided an incorrect meeting code.
+
+Regards,
+D117 Google Meet Attendance Reporting
+
+For any questions, please contact the Tech Department`)
+
+}
+
+
+
+// This fucntion creates a Google Doc, populating it with the attendance report
+
+function createDocument(meetingCode, fileArray, userEmail, meetDate, meetPeriod) {
+    var style = {};
+    style[DocumentApp.Attribute.HORIZONTAL_ALIGNMENT] =
+        DocumentApp.HorizontalAlignment.RIGHT;
+    style[DocumentApp.Attribute.FONT_FAMILY] = 'Calibri';
+    style[DocumentApp.Attribute.FONT_SIZE] = 18;
+    style[DocumentApp.Attribute.BOLD] = true;
+    var doc = DocumentApp.create("Attendance Report for Google Meet " + meetingCode +" - " +meetDate)
+    doc.getBody().appendParagraph("Attendance Report for Google Meet " + meetingCode +"\n" +"Date/Period: " +meetDate +", Period " +meetPeriod +"\n" +"Teacher/Organizer: " +userEmail).setHeading(DocumentApp.ParagraphHeading.HEADING2)
+    var docId = doc.getId()
+    var docLink = doc.getUrl()
+    doc.getBody().appendTable(fileArray).getRow(0).setAttributes(style)
+    return doc
+}
+
+
+
+// This function shares the above created Google Doc with the requestor
+
+function shareDoc(docId, userEmail) {
+    DocumentApp.openById(docId).addViewer(userEmail)
+    return userEmail
+}
