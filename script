@@ -6,7 +6,7 @@
 // so create a custom admin role for this account in your Google Admin Console and grant access to Reports (under Admin Console Privileges > Security)
 // Create a Google Form to receive meeting codes, email addresses, date of Meet, and class period, and have this form send responses to a Google Sheet. Configure your Form to automatically collect email addresses.
 // Example Form at https://forms.gle/CxRvnCWHpjdKnobe8. All your users need to request these reports is to write down their 10-digit Meet codes before they end their Meets.
-// Then install this script to the Sheet you created and configure it to run on a trigger (run On Form Submit). Ideal usage of this would be to post your Form in a place that is easy to access, like embedding it in a Google Site.
+// Then copy/paste this script to the Sheet (in Script Editor) you created and configure it to run on a trigger (run On Form Submit). Ideal usage of this would be to post your Form in a place that is easy to access, like embedding it in a Google Site.
 // Add two more columns to your Sheet: "Report Status" and "Report Link"
 // Make sure you are aware of Google Apps Script API quotas! For small and medium-sized schools, you should be fine, but this may not scale well to large domains.
 function getMeetAttendance() {
@@ -173,9 +173,9 @@ function authorizedResponse(formSheet, docLink, meetingCode, userEmail, meetDate
                        ${docLink}
                        
 Regards,
-D117 Google Meet Attendance Reporting
+D117 Google Meet Attendance Reporting // Change this to match your school.
 
-For any questions, please contact the Tech Department`)
+For any questions, please contact the Tech Department`) // Change this to match your school.
 
 }
 
@@ -189,9 +189,9 @@ function unAuthorizedResponse(formSheet, docLink, meetingCode, userEmail, meetDa
     GmailApp.sendEmail(userEmail, "Your attendance report for Google Meet " + meetingCode +" - " +meetDate, `Sorry, you are not authorized to get an attendance report for Google Meet ${meetingCode}. You are either not the meeting organizer, or you provided an incorrect meeting code.
 
 Regards,
-D117 Google Meet Attendance Reporting
+D117 Google Meet Attendance Reporting // Change this to match your school.
 
-For any questions, please contact the Tech Department`)
+For any questions, please contact the Tech Department`) // Change this to match your school.
 
 }
 
