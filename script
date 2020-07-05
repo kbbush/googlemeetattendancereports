@@ -27,7 +27,7 @@ function getMeetAttendance() {
         var meetDate = data[i][4].toString() // This var maps to the meeting date column in your Sheet.
         var meetPeriod = data[i][5].toString() // If you are setting this up for a school that doesn't use class periods, you can delete this line and this var wherever it appears in the code. This var maps to the class period column in your Sheet.
         var fileArray = [
-                ["User Email", "Duration (in mins)"]
+                ["Meeting Participant", "Duration (in mins)"]
             ]
 
 
